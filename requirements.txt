@@ -1,0 +1,5 @@
+twitchAPI
+obsws-python
+requests
+BeautifulSoup4
+selenium
