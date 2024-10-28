@@ -46,6 +46,7 @@ class MediaShareEntry(object):
 
         self._start_time = start_time
         self._duration = duration
+        self.link = self.link.replace('youtube', 'yout-ube', 1)
 
     def __str__(self) -> str:
         if self._start_time == 0:
