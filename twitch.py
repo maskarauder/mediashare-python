@@ -4,7 +4,8 @@
 from twitchAPI.twitch import Twitch
 from twitchAPI.oauth import CodeFlow
 from twitchAPI.helper import first
-from twitchAPI.pubsub import PubSub
+from twitchAPI.object.eventsub import ChannelCheerEvent, ChannelPointsCustomRewardRedemptionAddEvent
+from twitchAPI.eventsub.websocket import EventSubWebsocket
 from uuid import UUID
 
 # App Specific
@@ -88,8 +89,8 @@ async def add_to_queue(forced_end:int, message:str) -> None:
             obs_thread.start()
 
 
-async def callback_bits(uuid: UUID, data: dict) -> None:
-    nbits = data['data']['bits_used']
+async def callback_bits(data: ChannelCheerEvent) -> None:
+    nbits = data.event.bits
     link = None
     start_time = -1
     end_time = -1
@@ -97,18 +98,18 @@ async def callback_bits(uuid: UUID, data: dict) -> None:
         forced_end = MIN_DURATION + ((nbits - TRIGGER_BIT_VALUE) / BITS_PER_SECOND)
         if forced_end > MAX_DURATION:
             forced_end = MAX_DURATION
-        await add_to_queue(forced_end, data['data']['chat_message'])
+        await add_to_queue(forced_end, data.event.message)
 
 
-async def callback_channelpoints(uuid:UUID, data:dict) -> None:
+async def callback_channelpoints(data: ChannelPointsCustomRewardRedemptionAddEvent) -> None:
     if not CHANNELPOINTS_MEDIASHARE:
         return
 
-    reward = data['data']['redemption']['reward']['title']
+    reward = data.event.reward.title
     if reward.lower() != CHANELLPOINTS_REWARD_NAME.lower():
         return
     
-    user_input = data['data']['redemption']['user_input']
+    user_input = data.event.user_input
     if user_input is None or user_input == '':
         return
     
@@ -121,12 +122,10 @@ async def callback_channelpoints(uuid:UUID, data:dict) -> None:
     await add_to_queue(forced_end, user_input)
 
 async def setup_twitch_listener():
-    #twitch = await Twitch(APP_TOKEN, APP_SECRET)
     twitch = await Twitch(APP_TOKEN, None, authenticate_app=False)
     
     target_scope = TARGET_SCOPE
 
-    #auth = UserAuthenticator(twitch, target_scope, force_verify=False)
     auth = CodeFlow(twitch, target_scope)
 
     code, url = await auth.get_code()
@@ -140,19 +139,15 @@ async def setup_twitch_listener():
     await twitch.set_user_authentication(token, target_scope, refresh_token)
     user = await first(twitch.get_users(logins=[TARGET_CHANNEL]))
 
-    # Start PubSub
-    pubsub = PubSub(twitch)
-    pubsub.start()
+    # Start EventSub
+    eventsub = EventSubWebsocket(twitch)
+    eventsub.start()
 
     if AuthScope.BITS_READ in target_scope:
-        bits_uuid = await pubsub.listen_bits(user.id, callback_bits)
+        await eventsub.listen_channel_cheer(user.id, callback_bits)
     if CHANNELPOINTS_MEDIASHARE and AuthScope.CHANNEL_READ_REDEMPTIONS in target_scope:
-        channel_points_uuid = await pubsub.listen_channel_points(user.id, callback_channelpoints)
+        await eventsub.listen_channel_points_custom_reward_redemption_add(user.id, callback_channelpoints)
     input('Awaiting bits. press Enter to close...')
 
-    if AuthScope.BITS_READ in target_scope:
-        await pubsub.unlisten(bits_uuid)
-    if AuthScope.CHANNEL_READ_REDEMPTIONS in target_scope:
-        await pubsub.unlisten(channel_points_uuid)
-    pubsub.stop()
+    await eventsub.stop()
     await twitch.close()
